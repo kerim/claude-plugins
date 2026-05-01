@@ -1,4 +1,4 @@
-# Development Instructions for logseq-cli-skill
+# Development Instructions for spellbook
 
 ## Skill Development Workflow
 
@@ -10,12 +10,12 @@ This repo is a Claude Code marketplace plugin. Skill files live under `plugins/l
 2. **Update README.md** if functionality changes
 3. **Ask user to review changes** before committing
 4. **Bump `version` in `plugins/logseq-cli/.claude-plugin/plugin.json`** on every release
-5. **Do not rename the `name` field in `.claude-plugin/marketplace.json`** — it is the user-visible install token (`logseq-cli@logseq-cli-skill`); renaming breaks existing installs
+5. **Do not rename the `name` field in `.claude-plugin/marketplace.json`** — it is the user-visible install token (`logseq-cli@spellbook`); renaming breaks existing installs
 
 ### File Structure
 
 ```
-logseq-cli-skill/
+spellbook/
 ├── .claude-plugin/
 │   └── marketplace.json          # Marketplace catalog
 ├── plugins/
