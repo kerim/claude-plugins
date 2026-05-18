@@ -1,40 +1,142 @@
 ---
 name: logseq-cli
-description: Interface with Logseq DB graphs using the @logseq/cli command-line tool. Use this skill when working with Logseq databases in Claude Code - for querying graphs, searching blocks, listing graphs, or executing datalog queries. Essential for integration workflows that need direct database access.
+description: Interface with Logseq DB graphs using the `logseq` command-line tool bundled with Logseq.app. Use this skill whenever a request involves running `logseq` commands, inspecting or editing graphs/pages/blocks/tasks/tags/properties, running Datascript queries, managing graphs and db-worker-node servers, or interpreting CLI output.
 ---
 
 # Logseq CLI
 
-Comprehensive guide for using the Logseq CLI (`@logseq/cli`) within Claude Code workflows. This tool provides command-line access to Logseq DB graphs for querying, searching, and managing graph data.
+Operate the `logseq` CLI to inspect and modify graphs, pages, blocks, tasks, tags, and properties, run Datascript queries, view page/block trees, manage graphs and backups, and control db-worker-node servers.
 
-## When to Use This Skill
+## What this CLI is
 
-Use this skill when you need to:
+The current `logseq` binary is bundled with the **Logseq desktop app** (Electron). It is not the old `@logseq/cli` npm package — that package is obsolete and its flags (especially `-p` / `--properties-readable` and positional query arguments) no longer apply.
 
-- Query Logseq DB graphs with datalog queries
-- Search for blocks in Logseq graphs
-- List available graphs on the system
-- Test query syntax before implementing in code
-- Export or import graph data
-- Integrate Logseq data into Claude Code workflows
+On macOS, the launcher is typically a tiny shim at `~/.local/bin/logseq` that execs the Electron binary with `ELECTRON_RUN_AS_NODE=1`:
 
-**Trigger phrases:**
-- "query my Logseq graph"
-- "search Logseq for..."
-- "list my Logseq graphs"
-- "test this Logseq query"
-- "access Logseq database"
+```sh
+ELECTRON_RUN_AS_NODE=1 exec "/Applications/Logseq.app/Contents/MacOS/Logseq" \
+  "/Applications/Logseq.app/Contents/Resources/app.asar/js/logseq-cli.js" "$@"
+```
 
-**Related skills:**
-- `logseq-db-knowledge` - Understanding Logseq DB structure
-- `logseq-db-plugin-api-skill` - Building Logseq plugins
-- `logseq-schema` (RCmerci) - Authoritative Datascript schema reference for writing Datalog queries
+A short Electron code-signing line may appear on stderr when running — it is harmless.
 
----
+## Canonical skill
 
-## Claude Code Integration (CRITICAL)
+The CLI ships its own authoritative skill. Whenever you suspect this file is stale, re-pull it:
 
-### Sandbox Configuration
+```bash
+logseq skill show         # print built-in skill markdown
+logseq skill install      # write it to disk
+```
+
+The built-in skill's policy — followed here too — is to **not memorize options or examples**, because they change. Always check live:
+
+```bash
+logseq --help                            # top-level commands
+logseq <command> --help                  # command-specific options
+logseq <command> <subcommand> --help     # for grouped commands
+logseq example                           # discover runnable examples
+logseq example <command-or-prefix...>    # scoped examples (e.g. `logseq example upsert page`)
+```
+
+## Command groups (high-level map)
+
+Use `--help` to get the live, exact list. As of this writing, the groups are:
+
+- **Graph inspect & edit**
+  - `list page|tag|property|task|node|asset` — typed listing
+  - `upsert block|page|task|asset|tag|property` — create or update
+  - `remove block|page|tag|property`
+  - `query`, `query list` — Datascript queries (see below)
+  - `qsearch` — search graph Markdown Mirror with QMD
+  - `search block|page|property|tag` — typed search by title
+  - `show` — show page/block tree
+- **Graph management**
+  - `graph list|create|switch|remove|validate|info|export|import`
+  - `graph backup list|create|restore|remove`
+  - `server list|cleanup|start|stop|restart` — db-worker-node servers
+  - `doctor` — runtime diagnostics
+  - `sync status|start|stop|upload|download|asset download|remote-graphs|ensure-keys|grant-access|config set|get|unset`
+- **Authentication**: `login`, `logout`
+- **Utilities**: `completion`, `debug`, `example`, `qmd`, `skill`
+
+## Global options (apply to most commands)
+
+- `-g, --graph <name>` — target graph (most commands need this)
+- `-o, --output <human|json|edn>` — output format. Default `human`. Use `json` or `edn` only when machine-readable output is required.
+- `--config <path>` — path to `cli.edn` (default `<root-dir>/cli.edn`)
+- `--root-dir <path>` — CLI root dir (default `~/logseq`)
+- `--timeout-ms <ms>` — request timeout (default `10000`)
+- `--profile` — stage timing to stderr
+- `-v, --verbose` — debug logging to stderr
+- `--version`, `-h, --help`
+
+## Datascript queries
+
+The `query` command no longer takes a positional query string or the old `-p` flag. It uses named flags:
+
+```bash
+logseq query --graph "<name>" --query '<EDN query>'
+logseq query --graph "<name>" --name <named-query> --inputs '<EDN vector>'
+logseq query list --graph "<name>" [--output edn]
+```
+
+- `--query` accepts an EDN Datascript query.
+- `--name` runs a built-in query or a `custom-queries` entry from `cli.edn`. `query list` enumerates both.
+- `--inputs` is an EDN vector of arguments passed to the query.
+- Use `--output json` or `--output edn` for parseable output; the default `human` form is for reading.
+
+Discover working examples with `logseq example query`.
+
+## Tasks: prefer task-scoped commands
+
+If a request is about tasks, prefer the task-typed commands before falling back to block/page workflows:
+
+- `list task` to read; `upsert task` to create or update.
+- Task state belongs in `--status` (e.g. `--status todo|doing|done`), **not** in `--content`. Do not write `TODO`/`DOING`/`DONE` into the content string.
+- If a task block also needs tags, do the tag association on the **same block** by id afterwards, e.g.:
+  ```bash
+  logseq upsert task --graph "<g>" --target-page "<page>" --content "Some content" --status done --output json
+  # then use the returned block id:
+  logseq upsert block --graph "<g>" --id <id> --update-tags '["AI-GENERATED" "CLI"]'
+  ```
+
+## Structured writes
+
+When writing multi-item or hierarchical content, build a **block tree** rather than packing everything into one `--content` string. Each logical bullet, row, or subsection should usually become its own block (siblings/children). Reserve `--content` for true single-block writes or targeted single-block updates.
+
+## Tag association
+
+Use explicit tag options, not hashtags-in-content or comma-separated strings:
+
+- Prefer `--update-tags` and `--remove-tags` on `upsert block` / `upsert page`.
+- `--update-tags` expects an **EDN vector**, e.g. `'["AI-GENERATED" "CLI"]'`. A comma-separated string is not parsed as tags.
+- Tag values may be tag title/name strings, db/id, UUID, or `:db/ident`. String values may include a leading `#`, but they still go inside the vector.
+- Tags must already exist and be public. Create first when needed: `logseq upsert tag --name "<TagName>"`. After a tag-association failure, verify the tag exists/is public before retrying.
+
+## Anti-patterns
+
+- ❌ `upsert block --content "DONE Implemented and verified ..."` — task state in content.
+  ✅ `upsert task --status done --content "Implemented and verified ..."`
+- ❌ `--content "Summary #AI-GENERATED"` — treating hashtags as tag association.
+  ✅ `--update-tags '["AI-GENERATED"]'`
+- ❌ `--update-tags "AI-GENERATED,CLI"` — comma-separated string.
+  ✅ `--update-tags '["AI-GENERATED" "CLI"]'`
+- ❌ Hardcoding old `@logseq/cli` flags (`-p`, `--properties-readable`, positional query string, `export -f`, `mcp-server`). They no longer exist.
+
+## Tips
+
+- `query list` returns both built-in queries and `custom-queries` from `cli.edn`.
+- `show --id` accepts either one db/id or an EDN vector of ids.
+- `remove block --id` also accepts one db/id or an EDN vector.
+- `upsert block` enters **update mode** when `--id` or `--uuid` is provided; otherwise it creates.
+- The CLI works whether or not the Logseq desktop app is running; some commands (server, sync) interact with a long-running db-worker-node process.
+- If `logseq` reports it doesn't have read/write permission for `root-dir`, check filesystem permissions or set `LOGSEQ_CLI_ROOT_DIR`.
+- In sandboxed environments, `graph create` may print a process-scan warning to stderr; if command status is `ok`, the graph is still created.
+
+## Claude Code integration
+
+### Sandbox (read this first)
 
 The CLI spawns a `db-worker-node` daemon that binds an HTTP server on 127.0.0.1 for IPC. Claude Code's macOS sandbox blocks loopback `bind()` by default, so the daemon fails before the CLI returns. Required settings in `~/.claude/settings.json`:
 
@@ -51,1109 +153,34 @@ The CLI spawns a `db-worker-node` daemon that binds an HTTP server on 127.0.0.1 
 }
 ```
 
-**If `logseq` commands fail with `Error (server-start-failed): db-worker-node failed to publish health`, connection-refused on 127.0.0.1, or `EPERM`/`EACCES` on `bind()`, the user is missing `allowLocalBinding: true`.** Stop and surface this to the user. Do NOT work around it with `dangerouslyDisableSandbox` (brittle, prompts every call), `excludedCommands` (doesn't propagate to the daemon child), or `allowAllUnixSockets` (no-op on macOS — wrong knob). See README "Sandbox configuration" for the full explanation.
+**If `logseq` commands fail with `Error (server-start-failed): db-worker-node failed to publish health`, connection-refused on 127.0.0.1, or `EPERM`/`EACCES` on `bind()`, the user is missing `allowLocalBinding: true`.** Stop and surface this to the user. Do NOT work around it with `dangerouslyDisableSandbox` (brittle, prompts every call), `excludedCommands` (doesn't propagate to the daemon child), or `allowAllUnixSockets` (no-op on macOS — wrong knob). See the marketplace README's "Sandbox configuration" section for the full explanation.
 
-### Bash Tool Pattern
-
-**Standard pattern in Claude Code:**
+### Bash tool pattern
 
 ```typescript
 Bash({
-  command: 'logseq query -g "LSEQ 2025-12-15" -p \'[:find (pull ?b [*]) :where [?b :block/title]]\'',
-  description: "Query Logseq graph for all blocks with titles"
+  command: 'logseq query --graph "<graph-name>" --query \'[:find (pull ?b [*]) :where [?b :block/title]]\' --output json',
+  description: "Run Datascript query, JSON output"
 })
 ```
 
-### Shell Considerations
+Tips:
 
-**Fish Shell (User's Default):**
-- Quote handling works the same as bash/zsh
-- Use single quotes for datalog queries: `'[:find ...]'`
-- Escape quotes inside query if needed: `\'[:find ...]\'`
+- Use **single quotes** around the EDN query and double quotes for string literals inside it.
+- For programmatic parsing, always pass `--output json` (or `edn`) — the default `human` format is not stable.
+- The user's default shell is fish; quoting works the same as bash/zsh for these commands.
 
----
+### Discovery workflow
 
-## Core Commands Reference
+1. `logseq graph list` — find graph names (case-sensitive; use the exact string with `--graph`).
+2. `logseq example <command-prefix>` — get a runnable template.
+3. `logseq <command> --help` — confirm flags.
+4. Replace placeholder ids/uuids with real entities from `logseq list ...`, `logseq show ...`, or `logseq query ...`.
+5. For graph transfer, keep `graph export --file` and `graph import --input` paths consistent.
 
-### `logseq list`
+## Related skills
 
-**Purpose:** List all available Logseq graphs (both DB and File graphs)
-
-**Syntax:**
-```bash
-logseq list
-```
-
-**Options:**
-- `-h, --help` - Print help
-
-**Example Output:**
-```
-DB Graphs:
-LSEQ 2025-12-15
-Logseq friends
-
-File Graphs:
-logseq db import
-```
-
-**Usage in Claude Code:**
-```typescript
-Bash({
-  command: 'logseq list',
-  description: "List available Logseq graphs"
-})
-```
-
-**Important Notes:**
-- Graph names are case-sensitive
-- Use exact names from this output in `-g` flag
-- DB graphs support full datalog queries
-- File graphs have limited query support
-
----
-
-### `logseq query`
-
-**Purpose:** Execute datalog or entity queries against Logseq graphs
-
-**Syntax:**
-```bash
-logseq query [args] [options]
-```
-
-**Options:**
-- `-a, --api-server-token` - API server token to query current in-app graph
-- `-g, --graphs` - Local graph(s) to query (REQUIRED for local queries)
-- `-p, --properties-readable` - Show property values instead of IDs (HIGHLY RECOMMENDED)
-- `-t, --title-query` - Invoke query on `:block/title` only
-- `-h, --help` - Print help
-
-**CRITICAL Syntax Rules:**
-
-✅ **CORRECT:**
-```bash
-logseq query -g "GRAPH NAME" -p 'QUERY'
-```
-
-❌ **WRONG (returns empty results):**
-```bash
-logseq query -g "GRAPH NAME" -- 'QUERY'
-```
-
-**The `-p` flag is REQUIRED for meaningful output. Without it, you'll see entity IDs instead of values.**
-
-**Query Types:**
-
-1. **Datalog Query:**
-   ```bash
-   logseq query -g "LSEQ 2025-12-15" -p '[:find (pull ?b [*]) :where [?b :block/title]]'
-   ```
-
-2. **Entity Query (by UUID):**
-   ```bash
-   logseq query -g "LSEQ 2025-12-15" -p 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx'
-   ```
-
-3. **Entity Query (by db/id):**
-   ```bash
-   logseq query -g "LSEQ 2025-12-15" -p '1108'
-   ```
-
-**Claude Code Example:**
-```typescript
-Bash({
-  command: 'logseq query -g "LSEQ 2025-12-15" -p \'[:find (pull ?b [:block/uuid :block/title]) :where [?b :block/tags ?t] [?t :block/title "contact"]]\'',
-  description: "Find all blocks tagged with 'contact'"
-})
-```
-
----
-
-### `logseq search`
-
-**Purpose:** Simple text search across block titles
-
-**Syntax:**
-```bash
-logseq search [search-terms] [options]
-```
-
-**Options:**
-- `-a, --api-server-token` - API server token to search current graph
-- `-g, --graph` - Local graph to search (REQUIRED)
-- `-r, --raw` - Print raw response
-- `-l, --limit` - Limit max results (default: 100)
-- `-h, --help` - Print help
-
-**Important:** Only searches `:block/title` - does not search block content
-
-**Example:**
-```bash
-logseq search "contact" -g "LSEQ 2025-12-15" -l 50
-```
-
-**Claude Code Example:**
-```typescript
-Bash({
-  command: 'logseq search "search term" -g "LSEQ 2025-12-15"',
-  description: "Search for blocks matching 'search term'"
-})
-```
-
----
-
-### `logseq show`
-
-**Purpose:** Display graph metadata and debugging information
-
-**Syntax:**
-```bash
-logseq show [graphs]
-```
-
-**Options:**
-- `-h, --help` - Print help
-
-**Example:**
-```bash
-logseq show "LSEQ 2025-12-15"
-```
-
-**Use Cases:**
-- Check graph creation date
-- Verify graph exists
-- Debug graph access issues
-
----
-
-### `logseq export`
-
-**Purpose:** Export graph to Markdown format
-
-**Syntax:**
-```bash
-logseq export [options]
-```
-
-**Options:**
-- `-g, --graph` - Local graph to export (REQUIRED)
-- `-f, --file` - File to save export (REQUIRED)
-- `-h, --help` - Print help
-
-**Example:**
-```bash
-logseq export -g "LSEQ 2025-12-15" -f "/tmp/claude/export.md"
-```
-
-**Claude Code Example:**
-```typescript
-Bash({
-  command: 'logseq export -g "LSEQ 2025-12-15" -f "/tmp/claude/logseq-export-$(date +%Y%m%d).md"',
-  description: "Export Logseq graph to Markdown"
-})
-```
-
----
-
-### `logseq export-edn` / `logseq import-edn`
-
-**Purpose:** Export/import graph in EDN (Extensible Data Notation) format
-
-**Export Syntax:**
-```bash
-logseq export-edn -g "GRAPH" -f "output.edn"
-```
-
-**Import Syntax:**
-```bash
-logseq import-edn -g "GRAPH" -f "input.edn"
-```
-
-**Use Cases:**
-- Programmatic graph manipulation
-- Backup/restore workflows
-- Graph migration
-
----
-
-### Other Commands
-
-**`logseq append`** - Append text to current page (requires API token)
-
-**`logseq mcp-server`** - Run MCP (Model Context Protocol) server for Claude integration
-
-**`logseq validate`** - Validate DB graph integrity
-
----
-
-## Query Syntax Patterns (Comprehensive)
-
-### Basic Datalog Structure
-
-```clojure
-[:find WHAT-TO-RETURN
- :where CONDITIONS]
-```
-
-**Components:**
-- `:find` - What to return (pull pattern, variables, etc.)
-- `:where` - Conditions that must be true
-
-**Variables:**
-- Start with `?` (e.g., `?b`, `?t`, `?title`)
-- Bind to entities/values in `:where` clauses
-
----
-
-### Finding Blocks by Title
-
-**Simple title match:**
-```clojure
-[:find (pull ?b [*])
- :where
- [?b :block/title "Exact Title"]]
-```
-
-**Case-insensitive substring search:**
-```clojure
-[:find (pull ?b [*])
- :where
- [?b :block/title ?title]
- [(clojure.string/lower-case ?title) ?lower]
- [(clojure.string/includes? ?lower "search term")]]
-```
-
-**Real example (tested and working):**
-```bash
-logseq query -g "LSEQ 2025-12-15" -p '[:find (pull ?b [*]) :where [?b :block/tags ?t] [?t :block/title "contact"] [?b :block/title ?title] [(clojure.string/includes? ?title "lin")]]'
-```
-
-This finds all blocks:
-1. Tagged with "contact"
-2. With "lin" somewhere in the title (case-sensitive)
-
-**Result:** 4 blocks (Leyla Erlinda Friedman, Arline Lederman, Laurent Abelin, 陳憶玲 Yiling Chen)
-
----
-
-### Finding Blocks by Tags
-
-**Single tag:**
-```clojure
-[:find (pull ?b [*])
- :where
- [?b :block/tags ?t]
- [?t :block/title "tag-name"]]
-```
-
-**Multiple tags (AND):**
-```clojure
-[:find (pull ?b [*])
- :where
- [?b :block/tags ?t1]
- [?t1 :block/title "tag1"]
- [?b :block/tags ?t2]
- [?t2 :block/title "tag2"]]
-```
-
-**Multiple tags (OR):**
-```clojure
-[:find (pull ?b [*])
- :where
- [?b :block/tags ?t]
- (or
-   [?t :block/title "tag1"]
-   [?t :block/title "tag2"])]
-```
-
----
-
-### Property Filtering
-
-**Blocks with specific property:**
-```clojure
-[:find (pull ?b [*])
- :where
- [?b :user.property/PropertyName]]
-```
-
-**Property with specific value:**
-```clojure
-[:find (pull ?b [*])
- :where
- [?b :user.property/Status "active"]]
-```
-
-**Property namespaces:**
-- `:user.property/` - User-defined properties
-- `:logseq.property/` - Built-in Logseq properties
-
-**Try both namespaces if unsure:**
-```clojure
-[:find (pull ?b [*])
- :where
- (or
-   [?b :user.property/PropertyName]
-   [?b :logseq.property/PropertyName])]
-```
-
----
-
-### Entity Queries
-
-**By UUID:**
-```bash
-logseq query -g "GRAPH" -p 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx'
-```
-
-**By db/id:**
-```bash
-logseq query -g "GRAPH" -p '1108'
-```
-
-**Multiple entities:**
-```bash
-logseq query -g "GRAPH" -p '1108 1109 1110'
-```
-
----
-
-### Advanced Patterns
-
-**Text search with multiple conditions:**
-```clojure
-[:find (pull ?b [*])
- :where
- [?b :block/title ?title]
- [(clojure.string/lower-case ?title) ?lower]
- [(clojure.string/includes? ?lower "keyword1")]
- [(clojure.string/includes? ?lower "keyword2")]]
-```
-
-**Combining tags and properties:**
-```clojure
-[:find (pull ?b [*])
- :where
- [?b :block/tags ?t]
- [?t :block/title "project"]
- [?b :user.property/Status ?status]
- [(= ?status "active")]]
-```
-
-**Date filtering (if using date properties):**
-```clojure
-[:find (pull ?b [*])
- :where
- [?b :user.property/DueDate ?date]
- [(> ?date 20250101)]]
-```
-
-**Using or-join for complex OR conditions:**
-```clojure
-[:find (pull ?b [*])
- :where
- [?b :block/title ?title]
- (or-join [?b]
-   (and [?b :block/tags ?t1] [?t1 :block/title "urgent"])
-   (and [?b :user.property/Priority "high"]))]
-```
-
----
-
-### Pull Patterns
-
-**Pull everything:**
-```clojure
-(pull ?b [*])
-```
-
-**Pull specific attributes:**
-```clojure
-(pull ?b [:block/uuid :block/title :block/created-at])
-```
-
-**Pull with nested entities:**
-```clojure
-(pull ?b [:block/uuid
-          :block/title
-          {:block/tags [:block/title]}])
-```
-
-**Common useful attributes:**
-- `:block/uuid` - Block UUID
-- `:block/title` - Block title (for pages/blocks)
-- `:block/created-at` - Creation timestamp
-- `:block/updated-at` - Last update timestamp
-- `:block/tags` - Tags applied to block
-- `:block/refs` - References in block
-- `:user.property/*` - User properties
-- `:db/id` - Database ID
-
----
-
-## Workflows
-
-### Query Development Workflow
-
-**1. Start with simplest query:**
-```bash
-logseq query -g "GRAPH" -p '[:find (pull ?b [:block/uuid]) :where [?b :block/uuid]]'
-```
-
-**2. Add one condition at a time:**
-```bash
-logseq query -g "GRAPH" -p '[:find (pull ?b [:block/uuid :block/title]) :where [?b :block/title]]'
-```
-
-**3. Add filtering:**
-```bash
-logseq query -g "GRAPH" -p '[:find (pull ?b [:block/uuid :block/title]) :where [?b :block/title ?title] [(clojure.string/includes? ?title "search")]]'
-```
-
-**4. Expand pull pattern:**
-```bash
-logseq query -g "GRAPH" -p '[:find (pull ?b [*]) :where [?b :block/title ?title] [(clojure.string/includes? ?title "search")]]'
-```
-
-**5. Verify results before using in code**
-
----
-
-### Debugging Failed Queries
-
-#### Empty Results `()`
-
-**Possible causes:**
-
-1. **Wrong syntax (missing `-p` flag):**
-   - ❌ `logseq query -g "GRAPH" -- 'query'`
-   - ✅ `logseq query -g "GRAPH" -p 'query'`
-
-2. **No matching data:**
-   - Verify with simpler query
-   - Check tag/property names are correct
-   - Try case-insensitive search
-
-3. **Wrong graph name:**
-   - Run `logseq list` to verify
-   - Graph names are case-sensitive
-
-4. **Wrong property namespace:**
-   - Try both `:user.property/` and `:logseq.property/`
-
-**Debugging steps:**
-
-```bash
-# Step 1: Verify graph exists
-logseq list
-
-# Step 2: Test simplest possible query
-logseq query -g "GRAPH" -p '[:find ?b :where [?b :block/uuid]]'
-
-# Step 3: Add conditions one at a time
-logseq query -g "GRAPH" -p '[:find ?b :where [?b :block/title]]'
-
-# Step 4: Test specific condition
-logseq query -g "GRAPH" -p '[:find ?t :where [?b :block/tags ?t] [?t :block/title "contact"]]'
-```
-
----
-
-#### Syntax Errors
-
-**Common mistakes:**
-
-❌ **Using `--` separator:**
-```bash
-logseq query -g "GRAPH" -- '[:find ...]'  # Returns empty
-```
-
-✅ **Correct syntax:**
-```bash
-logseq query -g "GRAPH" -p '[:find ...]'
-```
-
-❌ **Missing quotes around graph name:**
-```bash
-logseq query -g GRAPH -p '[:find ...]'  # Fails if graph has spaces
-```
-
-✅ **Always quote graph names:**
-```bash
-logseq query -g "GRAPH NAME" -p '[:find ...]'
-```
-
-❌ **Wrong quote nesting:**
-```bash
-logseq query -g "GRAPH" -p "[:find (pull ?b [*]) :where [?b :block/title "test"]]"
-```
-
-✅ **Use single quotes for query, double for strings inside:**
-```bash
-logseq query -g "GRAPH" -p '[:find (pull ?b [*]) :where [?b :block/title "test"]]'
-```
-
----
-
-#### Database Access Errors
-
-**Error: "unable to open database file"**
-
-**Cause:** The graph path is not accessible. Common reasons:
-- Wrong graph name (run `logseq list` to verify)
-- Logseq database is corrupted or moved
-- Graph path has changed since last use
-
-**Solution:** Verify the graph name with `logseq list` and use the exact string in `-g`.
-
-**Important:** The Logseq desktop app does NOT need to be closed. The CLI can access databases regardless of whether the app is running.
-
----
-
-## Data Model Understanding
-
-### Block Structure in Results
-
-**Example result:**
-```clojure
-{:block/uuid #uuid "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
- :block/title "Leyla Erlinda Friedman",
- :block/created-at 1746842700308,
- :block/updated-at 1749344667454,
- :block/tags [{:db/id 137} {:db/id 1076}],
- :block/refs [{:db/id 20} {:db/id 137} ...],
- :user.property/Birthday-CfafO3cr {:db/id 251},
- :user.property/Relations-bsQ-MeUO [{:db/id 1099} {:db/id 1107}],
- :db/id 1108}
-```
-
-**Key fields:**
-- `:block/uuid` - Globally unique identifier
-- `:db/id` - Database-specific ID (changes between graphs)
-- `:block/title` - Page/block title
-- `:block/name` - Normalized title (lowercase, hyphenated)
-- `:block/created-at` / `:updated-at` - Unix timestamps (milliseconds)
-
----
-
-### Entity References
-
-**Without `-p` flag:**
-```clojure
-:block/tags [{:db/id 137}]
-```
-
-**With `-p` flag (properties-readable):**
-```clojure
-:block/tags [{:db/id 137}]
-```
-
-Note: Even with `-p`, entity references still show `:db/id`. To see full data, you need to:
-
-1. **Expand in pull pattern:**
-```clojure
-[:find (pull ?b [:block/uuid
-                  :block/title
-                  {:block/tags [:block/title]}])
- :where ...]
-```
-
-Result:
-```clojure
-:block/tags [{:block/title "contact"} {:block/title "person"}]
-```
-
-2. **Or query the entity separately:**
-```bash
-logseq query -g "GRAPH" -p '137'  # Query by db/id
-```
-
----
-
-### Property Namespaces
-
-**User properties:**
-- Format: `:user.property/PropertyName-HASH`
-- Example: `:user.property/Birthday-CfafO3cr`
-- Created by users in Logseq
-
-**Built-in properties:**
-- Format: `:logseq.property/PropertyName`
-- Example: `:logseq.property/created-by-ref`
-- System properties
-
-**Best practice:** When querying unknown properties, try both:
-```clojure
-[:find (pull ?b [*])
- :where
- (or
-   [?b :user.property/PropertyName ?val]
-   [?b :logseq.property/PropertyName ?val])]
-```
-
-**CRITICAL — Reference properties need entity joins:** Properties with `:db.type/ref` store entity IDs, not strings. Querying `[?b :prop "Done"]` returns nothing. Use `[?b :prop ?ref] [?ref :block/title "Done"]` instead. See `examples/common-queries.md` → "Property Schema Discovery" and "Type-Aware Property Queries" for discovery queries and all type patterns.
-
----
-
-### Query Result Format Quirks (CRITICAL for Parsing)
-
-**IMPORTANT:** Query results have inconsistent key formatting that causes parsing errors if not handled correctly.
-
-#### Property Identifier Prefix Mismatch
-
-**In Queries (Required):** Property identifiers MUST have `:` prefix
-```clojure
-[:find (pull ?b [:user.property/ProjectStatus-IUJoj7Hs])
- :where [?b :user.property/ProjectStatus-IUJoj7Hs ?val]]
-```
-
-**In Results (No Prefix):** Property keys DON'T have `:` prefix
-```javascript
-{
-  "user.property/ProjectStatus-IUJoj7Hs": {"db/id": 1143},
-  "block/title": "My Block",
-  "db/id": 5424
-}
-```
-
-**Parsing Strategy:**
-```javascript
-// WRONG - assumes prefix exists
-const value = result['`:user.property/ProjectStatus`'];  // undefined!
-
-// CORRECT - check both formats
-const value = result[':user.property/ProjectStatus'] ||
-              result['user.property/ProjectStatus'];
-
-// BEST - know your context
-const value = result['user.property/ProjectStatus'];  // In results, no ':'
-```
-
-#### Result Structure Variations
-
-**Pull Query Results:**
-
-With `:limit 1`:
-```javascript
-{
-  "data": [
-    {"user.property/Status": {"db/id": 1143}},
-    {"user.property/Status": {"db/id": 1134}},
-    // ... multiple results
-  ]
-}
-```
-
-Access: `data[0]['user.property/Status']` NOT `data[0][0]['user.property/Status']`
-
-**Find Query Results:**
-
-Without pull:
-```clojure
-[:find ?title :where [?b :block/title ?title]]
-```
-
-Returns flat arrays:
-```javascript
-{"data": [["Title 1"], ["Title 2"], ["Title 3"]]}
-```
-
-Access: `data[0][0]` (nested array)
-
-With pull:
-```clojure
-[:find (pull ?b [:block/title]) :where [?b :block/title]]
-```
-
-Returns object arrays:
-```javascript
-{"data": [{"block/title": "Title 1"}, {"block/title": "Title 2"}]}
-```
-
-Access: `data[0]['block/title']` (direct property access)
-
-#### Entity Reference Values
-
-**Query returns:**
-```javascript
-{
-  "user.property/ProjectStatus": {
-    "db/id": 1143
-  }
-}
-```
-
-**Keys to check for entity refs:**
-- `'db/id'` (no colon - most common in results)
-- `':db/id'` (with colon - less common but possible)
-
-**Type Detection:**
-```javascript
-// Check both formats
-if (value && typeof value === 'object' &&
-    (value['db/id'] || value[':db/id'])) {
-  // This is an entity reference
-  valueType = ':db.type/ref';
-}
-```
-
-#### Common Parsing Pitfalls
-
-| Issue | Wrong Code | Correct Code |
-|-------|------------|--------------|
-| Property key prefix | `result[':user.property/X']` | `result['user.property/X']` |
-| Nested array assumption | `data[0][0][key]` | `data[0][key]` |
-| Entity ID key | `value[':db/id']` | `value['db/id'] \|\| value[':db/id']` |
-| Block title key | `block[':block/title']` | `block['block/title']` |
-
-#### Safe Parsing Function
-
-```javascript
-function safeGetProperty(obj, propWithoutColon) {
-  // Try without colon first (most common in results)
-  if (obj[propWithoutColon] !== undefined) {
-    return obj[propWithoutColon];
-  }
-  // Try with colon (rare but possible)
-  if (obj[':' + propWithoutColon] !== undefined) {
-    return obj[':' + propWithoutColon];
-  }
-  return undefined;
-}
-
-// Usage
-const status = safeGetProperty(result, 'user.property/ProjectStatus');
-const dbId = safeGetProperty(value, 'db/id');
-const title = safeGetProperty(block, 'block/title');
-```
-
-#### Real-World Example (Query Builder)
-
-**Problem:** Property dropdown not appearing
-**Root Causes Found:**
-1. Query used `:user.property/X` (correct)
-2. Code tried to access `result[':user.property/X']` (wrong - extra `:`)
-3. Code assumed `data[0][0]` nesting (wrong - flat object array)
-4. Type check looked for `':db/id'` (wrong - no `:` in result keys)
-
-**Solution:**
-```javascript
-// Build query WITH colon prefix
-const queryIdent = propertyIdent.startsWith(':') ?
-                   propertyIdent : `:${propertyIdent}`;
-const query = `[:find (pull ?b [${queryIdent}]) ...]`;
-
-// Parse result WITHOUT colon prefix
-const sampleValue = result.data[0][propertyIdent];  // No ':'!
-
-// Check entity ref WITHOUT assuming colon
-if (sampleValue['db/id'] || sampleValue[':db/id']) {
-  // It's a reference property
-}
-```
-
----
-
-### Timestamps
-
-**Format:** Unix timestamp in milliseconds
-
-**Example:**
-- `:block/created-at 1746842700308`
-- Human-readable: 2025-05-09 (approximately)
-
-**Filtering by date:**
-```clojure
-[:find (pull ?b [*])
- :where
- [?b :block/created-at ?date]
- [(> ?date 1735689600000)]]  ; After 2025-01-01
-```
-
-**Converting timestamps:**
-```bash
-# In fish shell
-date -r (math "1746842700308 / 1000")
-```
-
----
-
-## Technical Implementation Details
-
-Based on the `@logseq/cli` source code (v0.4.2):
-
-### Architecture
-
-**Language:** ClojureScript compiled with [nbb-logseq](https://github.com/logseq/nbb-logseq)
-**Database:** DataScript for queries (Clojure implementation of Datomic-like database)
-**Entry Point:** `cli.mjs` → loads `src/logseq/cli.cljs`
-
-### Query Processing
-
-**Datalog Queries:**
-- Detected by checking if query starts with `[` and contains `:find`
-- Rules from `logseq.db.frontend.rules` are automatically injected
-- Query structure: `[:find ... :where ...] + [:in $ '%]` (rules added automatically)
-- Results are automatically unwrapped if only one `:find` binding
-
-**Entity Queries:**
-- Accept multiple formats:
-  - UUID string: `"xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"`
-  - Integer db/id: `1108`
-  - EDN `:db/ident` keyword: `:logseq.class/Tag`
-- Resolved via `datascript.core/entity`
-- Multiple entities can be queried: `logseq query 1108 1109 1110 -g "GRAPH"`
-
-**Properties-Readable Flag (`-p`):**
-```clojure
-;; Implementation from query.cljs:32-48
-(defn- readable-properties [ent]
-  (->> (db-property/properties ent)
-       (mapv (fn [[k v]]
-               [k (cond
-                    ;; Special handling for tags/classes
-                    (#{:block/tags :logseq.property.class/extends ...} k)
-                    (mapv :db/ident v)
-
-                    ;; Set of entities → extract content
-                    (and (set? v) (every? entity? v))
-                    (set (map property-value-content v))
-
-                    ;; Single entity → get ident or content
-                    (entity? v)
-                    (or (:db/ident v) (property-value-content v))
-
-                    ;; Otherwise return as-is
-                    :else v)]))
-       (into {})))
-```
-
-This explains why even with `-p`:
-- Tags still show as `{:db/id 137}` but with `:db/ident` when expanded in pull
-- Entity references need explicit pull pattern expansion to see full data
-
-### Built-in Rules
-
-Queries automatically include DataScript rules:
-- `block-content` - Used for text search in `:block/title`
-- Other rules from `logseq.db.frontend.rules/db-query-dsl-rules`
-
-Example using built-in rule:
-```clojure
-[:find (pull ?b [*])
- :in $ % ?search-term
- :where (block-content ?b ?search-term)]
-```
-
-### Database Access
-
-**Local graphs:** SQLite files at:
-- macOS: `~/Library/Application Support/Logseq/graphs/`
-- Linux: `~/.config/Logseq/graphs/`
-- Windows: `%APPDATA%/Logseq/graphs/`
-
-**Connection:** Uses `logseq.db.common.sqlite-cli/open-db!`
-
-### API Server Mode
-
-**When using `-a` flag:**
-- Connects to Logseq desktop app's HTTP API server (default: http://localhost:12315)
-- Methods:
-  - `logseq.db.datascript_query` - For datalog queries
-  - `logseq.db.q` - For simple queries
-- Requires HTTP API server enabled in Logseq app
-
-### MCP Server
-
-The CLI includes an MCP (Model Context Protocol) server:
-```bash
-logseq mcp-server -g "GRAPH"  # HTTP streamable server on 127.0.0.1:12315
-logseq mcp-server -g "GRAPH" --stdio  # Stdio transport
-```
-
-**Purpose:** Integration with Claude and other AI assistants
-**Modes:**
-- HTTP Streamable (default)
-- stdio transport (for direct integration)
-
----
-
-## Error Handling
-
-### Common Errors and Solutions
-
-| Error | Cause | Solution |
-|-------|-------|----------|
-| Empty results `()` | Missing `-p` flag | Add `-p` to command |
-| Empty results `()` | Wrong graph name | Run `logseq list` to verify |
-| "unable to open database file" | Wrong/moved graph path | Run `logseq list` and verify graph name |
-| Syntax error | Wrong quote nesting | Use single quotes for query |
-| "graph not found" | Typo in graph name | Copy exact name from `logseq list` |
-| No results for property | Wrong namespace | Try both `:user.property/` and `:logseq.property/` |
-| "Cannot compare :block/refs to user.property/X" | Missing `:` prefix in query | Add `:` before property ident in query |
-| `undefined` when accessing result property | Used `:` prefix in result access | Remove `:` when accessing result keys |
-| "Cannot read properties of undefined" | Wrong array nesting assumption | Use `data[0][key]` not `data[0][0][key]` for pull queries |
-| Property type incorrectly detected as string | Checked for `':db/id'` with colon | Check both `'db/id'` and `':db/id'` formats |
-
----
-
-### Validation Checklist
-
-Before executing a query in code:
-
-- [ ] Tested query with CLI first using `logseq query`
-- [ ] Verified graph name with `logseq list`
-- [ ] Used `-p` flag for readable output
-- [ ] Quoted graph name and query correctly
-- [ ] Verified results are non-empty
-
----
-
-## Quick Reference
-
-### Common Commands Cheatsheet
-
-```bash
-# List graphs
-logseq list
-
-# Simple search
-logseq search "term" -g "GRAPH"
-
-# Basic query
-logseq query -g "GRAPH" -p '[:find (pull ?b [*]) :where [?b :block/title]]'
-
-# Query by tag
-logseq query -g "GRAPH" -p '[:find (pull ?b [*]) :where [?b :block/tags ?t] [?t :block/title "TAG"]]'
-
-# Query by UUID
-logseq query -g "GRAPH" -p 'UUID-HERE'
-
-# Export graph
-logseq export -g "GRAPH" -f "output.md"
-
-# Show graph info
-logseq show "GRAPH"
-```
-
----
-
-### Claude Code Bash Tool Template
-
-```typescript
-Bash({
-  command: 'logseq query -g "GRAPH NAME" -p \'QUERY HERE\'',
-  description: "Describe what this query does"
-})
-```
-
-**Copy-paste ready example:**
-
-```typescript
-Bash({
-  command: 'logseq query -g "LSEQ 2025-12-15" -p \'[:find (pull ?b [:block/uuid :block/title]) :where [?b :block/title]]\'',
-  description: "Query all blocks with titles"
-})
-```
-
----
-
-### Most Common Query Patterns
-
-**1. Find all pages/blocks:**
-```clojure
-[:find (pull ?b [*]) :where [?b :block/title]]
-```
-
-**2. Find by tag:**
-```clojure
-[:find (pull ?b [*]) :where [?b :block/tags ?t] [?t :block/title "TAG"]]
-```
-
-**3. Text search (case-insensitive):**
-```clojure
-[:find (pull ?b [*])
- :where
- [?b :block/title ?title]
- [(clojure.string/lower-case ?title) ?lower]
- [(clojure.string/includes? ?lower "search")]]
-```
-
-**4. Property filter:**
-```clojure
-[:find (pull ?b [*]) :where [?b :user.property/Status "active"]]
-```
-
-**5. Recent blocks:**
-```clojure
-[:find (pull ?b [*])
- :where
- [?b :block/created-at ?date]
- [(> ?date 1735689600000)]]
-```
-
----
-
-## Important Notes
-
-1. **Sandbox:** Requires `sandbox.network.allowLocalBinding: true` AND graph path in `sandbox.filesystem.allowWrite` in `~/.claude/settings.json`. See "Claude Code Integration" above.
-2. **Critical syntax:** Use `-p` flag, NOT `--` separator
-3. **Graph names:** Case-sensitive, use exact names from `logseq list`
-4. **App status:** CLI works whether or not Logseq app is running
-5. **Read-only:** Most CLI operations are read-only (except import/append)
-6. **Fish shell:** Default shell, works identically to bash for these commands
-7. **Testing first:** ALWAYS test queries with CLI before implementing in code
-8. **Entity refs:** Use `-p` flag and expanded pull patterns to see referenced data
-9. **Property namespaces:** Try both `:user.property/` and `:logseq.property/` if unsure
-10. **Timestamps:** In milliseconds, use `(> ?date TIMESTAMP)` for filtering
-
----
-
-## Integration with Other Skills
-
-**Use with `logseq-db-knowledge`:**
-- Understanding DB graph structure
-- Property types and inheritance
-- Block vs page differences
-
-**Use with `logseq-db-plugin-api-skill`:**
-- Testing queries before implementing in plugins
-- Validating datalog syntax
-- Understanding plugin query API
-
-**Workflow example:**
-1. Use this skill to explore data and test queries
-2. Use `logseq-db-knowledge` to understand data model
-3. Use `logseq-db-plugin-api-skill` to implement in plugin code
-
----
-
-## Package Information
-
-**NPM Package:** `@logseq/cli`
-**Current Version:** 0.4.2
-**License:** MIT
-**Node Requirement:** >=22.17.0
-
-**Source Code:**
-- Repository: https://github.com/logseq/logseq
-- Location: `deps/cli` directory
-- Language: ClojureScript (compiled with nbb-logseq)
-
-**Installation:**
-```bash
-npm install -g @logseq/cli
-```
-
-**Local Installation:**
-Already installed at `/opt/homebrew/lib/node_modules/@logseq/cli/` (via Homebrew/npm global)
-
-**Key Dependencies:**
-- `@logseq/nbb-logseq` - Node.js Babashka for ClojureScript
-- `better-sqlite3` - SQLite3 bindings
-- `@modelcontextprotocol/sdk` - MCP server support
-- `datascript` - Datalog database (transitive dependency)
-
-**Development:**
-See README at: `/opt/homebrew/lib/node_modules/@logseq/cli/README.md`
+- `logseq-db-knowledge` — Logseq DB graph data model (nodes, properties, tags, tasks).
+- `logseq-db-plugin-api-skill` — Building Logseq plugins; useful when prototyping queries before embedding them in plugin code.
+- `logseq-schema` — Authoritative Datascript schema and `:db/ident` reference for writing Datalog queries.
+- `qmd` — Local markdown search index; complements `logseq qsearch`.
